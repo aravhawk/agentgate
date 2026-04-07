@@ -21,7 +21,14 @@ import { getUser } from "@/lib/auth0";
 
 const date = new Date().toISOString();
 
-function wasApprovedInHistory(messages: Array<UIMessage>, toolName: string): boolean {
+type ApprovedAction = {
+  toolName: string;
+  args: unknown;
+};
+
+function getApprovedActionFromHistory(
+  messages: Array<UIMessage>
+): ApprovedAction | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === "assistant" && msg.parts) {
@@ -29,22 +36,28 @@ function wasApprovedInHistory(messages: Array<UIMessage>, toolName: string): boo
         if (part.type === "tool-invocation") {
           const partToolName = (part as any).toolName;
           const res = (part as any).result ?? (part as any).output;
-          if (res?.error === "APPROVAL_REQUIRED" && partToolName === toolName) {
-            // Found the most recent APPROVAL_REQUIRED for this tool.
-            // Check if any user message follows it.
+          if (res?.error === "APPROVAL_REQUIRED" && partToolName) {
             for (let j = i + 1; j < messages.length; j++) {
-              if (messages[j].role === "user") return true;
+              if (messages[j].role === "user") {
+                return {
+                  toolName: partToolName,
+                  args: res.preview ?? {},
+                };
+              }
             }
-            return false;
+            return null;
           }
         }
       }
     }
   }
-  return false;
+  return null;
 }
 
-function buildSystemPrompt(hasContract: boolean) {
+function buildSystemPrompt(
+  hasContract: boolean,
+  approvedAction: ApprovedAction | null
+) {
   const base = `You are AgentGate, an AI assistant that operates under a Permission Contract signed by the user.
 You have access to Google Calendar and GitHub tools.
 The current date and time is ${date}.
@@ -63,6 +76,18 @@ IMPORTANT RULES:
     );
   }
 
+  if (approvedAction) {
+    return `${base}
+
+The user has already approved a previously requested action.
+You must immediately call the ${approvedAction.toolName} tool with exactly these arguments:
+${JSON.stringify(approvedAction.args)}
+
+Do not ask for approval again.
+Do not explain first.
+Execute the tool now, then report the result.`;
+  }
+
   return base;
 }
 
@@ -75,6 +100,7 @@ export async function POST(req: NextRequest) {
   const user = await getUser();
   const userId = user?.sub ?? "anonymous";
   const contract = getContract(userId);
+  const approvedAction = getApprovedActionFromHistory(messages);
 
   // All available tools (guard decides which execute)
   const allTools: Record<string, any> = {
@@ -129,7 +155,8 @@ export async function POST(req: NextRequest) {
       };
     } else if (result.requiresApproval) {
       const originalExecute = toolDef.execute;
-      const approved = consumeApproval(userId, name) || wasApprovedInHistory(messages, name);
+      const approved =
+        consumeApproval(userId, name) || approvedAction?.toolName === name;
       if (approved) {
         guardedTools[name] = {
           ...toolDef,
@@ -141,7 +168,9 @@ export async function POST(req: NextRequest) {
               reason: "Approved by user",
             });
             if (typeof originalExecute === "function") {
-              return originalExecute(args);
+              return originalExecute(
+                approvedAction?.toolName === name ? approvedAction.args : args
+              );
             }
             return { error: "Tool has no execute function" };
           },
@@ -185,7 +214,7 @@ export async function POST(req: NextRequest) {
       async ({ writer }) => {
         const result = streamText({
           model: openai.chat("gpt-5.4"),
-          system: buildSystemPrompt(!!contract),
+          system: buildSystemPrompt(!!contract, approvedAction),
           messages: modelMessages,
           tools: guardedTools as any,
         });
