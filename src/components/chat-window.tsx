@@ -5,12 +5,12 @@ import {
   type UIMessage,
   DefaultChatTransport,
   generateId,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
   lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { toast } from "sonner";
 import {
-  ArrowDown,
   ArrowUpIcon,
   LoaderCircle,
   Bot,
@@ -18,6 +18,7 @@ import {
   ShieldX,
   ShieldAlert,
   Lock,
+  CheckCircle2,
 } from "lucide-react";
 import { useInterruptions } from "@auth0/ai-vercel/react";
 import ReactMarkdown from "react-markdown";
@@ -26,23 +27,25 @@ import { cn } from "@/lib/utils";
 import { TokenVaultInterruptHandler } from "./token-vault-handler";
 
 function shouldAutoSend({ messages }: { messages: UIMessage[] }): boolean {
-  if (!lastAssistantMessageIsCompleteWithToolCalls({ messages })) return false;
-  if (messages.length === 0) return false;
-  const last = messages[messages.length - 1];
-  if (!last || last.role !== "assistant") return false;
-  for (const part of last.parts ?? []) {
-    if (part.type === "tool-invocation") {
-      const result = (part as any).output ?? (part as any).result;
-      if (
-        result?.error === "CONTRACT_VIOLATION" ||
-        result?.error === "APPROVAL_REQUIRED" ||
-        result?.error === "ACTION_BLOCKED"
-      ) {
-        return false;
-      }
-    }
+  return (
+    lastAssistantMessageIsCompleteWithToolCalls({ messages }) ||
+    lastAssistantMessageIsCompleteWithApprovalResponses({ messages })
+  );
+}
+
+function isToolPart(part: any) {
+  return (
+    typeof part?.type === "string" &&
+    (part.type === "dynamic-tool" || part.type.startsWith("tool-"))
+  );
+}
+
+function getToolPartName(part: any) {
+  if (part.toolName) return part.toolName;
+  if (typeof part.type === "string" && part.type.startsWith("tool-")) {
+    return part.type.slice(5);
   }
-  return true;
+  return "tool";
 }
 
 function ViolationCard({ result }: { result: any }) {
@@ -65,9 +68,15 @@ function ViolationCard({ result }: { result: any }) {
   );
 }
 
-function ApprovalCard({ result, onApprove }: { result: any; onApprove?: (toolName: string) => void }) {
-  const [approved, setApproved] = useState(false);
-
+function ApprovalCard({
+  part,
+  onApprove,
+  onDeny,
+}: {
+  part: any;
+  onApprove?: (id: string) => void;
+  onDeny?: (id: string) => void;
+}) {
   return (
     <div
       className="my-2 rounded-lg overflow-hidden"
@@ -81,30 +90,54 @@ function ApprovalCard({ result, onApprove }: { result: any; onApprove?: (toolNam
         <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wide">Approval Required</span>
       </div>
       <div className="px-3 py-2">
-        <p className="text-xs text-amber-300/70">{result.message}</p>
-        {result.preview && (
+        <p className="text-xs text-amber-300/70">
+          This action needs approval before it can run.
+        </p>
+        <p className="text-[11px] text-amber-200/80 mt-2">
+          Tool: {getToolPartName(part)}
+        </p>
+        {part.input && (
           <pre
             className="text-[10px] text-white/30 mt-2 overflow-auto p-2 rounded"
             style={{ background: "rgba(255,255,255,0.03)" }}
           >
-            {JSON.stringify(result.preview, null, 2)}
+            {JSON.stringify(part.input, null, 2)}
           </pre>
         )}
-        {onApprove && !approved && (
-          <button
-            onClick={() => {
-              setApproved(true);
-              onApprove(result.toolName);
-            }}
-            className="mt-2 px-3 py-1.5 rounded-md text-[11px] font-semibold text-black transition"
-            style={{ background: "#fbbf24" }}
-          >
-            Approve this action
-          </button>
-        )}
-        {approved && (
-          <p className="mt-2 text-[11px] text-emerald-400">Approved. Retrying...</p>
-        )}
+        <div className="mt-2 flex gap-2">
+          {onApprove && (
+            <button
+              onClick={() => onApprove(part.approval.id)}
+              className="px-3 py-1.5 rounded-md text-[11px] font-semibold text-black transition"
+              style={{ background: "#fbbf24" }}
+            >
+              Approve
+            </button>
+          )}
+          {onDeny && (
+            <button
+              onClick={() => onDeny(part.approval.id)}
+              className="px-3 py-1.5 rounded-md text-[11px] font-semibold text-white/80 transition"
+              style={{ background: "rgba(255,255,255,0.08)" }}
+            >
+              Deny
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SuccessCard({ title }: { title: string }) {
+  return (
+    <div
+      className="my-2 rounded-lg p-3"
+      style={{ border: "1px solid rgba(52,211,153,0.16)", background: "rgba(52,211,153,0.05)" }}
+    >
+      <div className="flex items-center gap-2">
+        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+        <span className="text-[11px] font-medium text-emerald-400">{title}</span>
       </div>
     </div>
   );
@@ -134,7 +167,15 @@ function ToolLoading({ name }: { name: string }) {
   );
 }
 
-function MessageBubble({ message, onApprove }: { message: UIMessage; onApprove?: (toolName: string) => void }) {
+function MessageBubble({
+  message,
+  onApprove,
+  onDeny,
+}: {
+  message: UIMessage;
+  onApprove?: (id: string) => void;
+  onDeny?: (id: string) => void;
+}) {
   const isUser = message.role === "user";
 
   return (
@@ -159,16 +200,74 @@ function MessageBubble({ message, onApprove }: { message: UIMessage; onApprove?:
               </div>
             );
           }
-          if (part.type === "tool-invocation") {
-            const state = (part as any).state;
-            if (state === "call" || state === "partial-call") {
-              return <ToolLoading key={i} name={(part as any).toolName} />;
+          if (isToolPart(part)) {
+            const toolPart = part as any;
+            if (
+              toolPart.state === "input-streaming" ||
+              toolPart.state === "input-available"
+            ) {
+              return <ToolLoading key={i} name={getToolPartName(toolPart)} />;
             }
-            const result = (part as any).output ?? (part as any).result;
-            if (result?.error === "CONTRACT_VIOLATION") return <ViolationCard key={i} result={result} />;
-            if (result?.error === "APPROVAL_REQUIRED") return <ApprovalCard key={i} result={result} onApprove={onApprove} />;
-            if (result?.error === "ACTION_BLOCKED") return <BlockedCard key={i} result={result} />;
-            return null;
+            if (toolPart.state === "approval-requested") {
+              return (
+                <ApprovalCard
+                  key={i}
+                  part={toolPart}
+                  onApprove={onApprove}
+                  onDeny={onDeny}
+                />
+              );
+            }
+            if (toolPart.state === "approval-responded") {
+              return (
+                <SuccessCard
+                  key={i}
+                  title={
+                    toolPart.approval?.approved
+                      ? "Approval received. Executing action..."
+                      : "Action denied by user."
+                  }
+                />
+              );
+            }
+            if (toolPart.state === "output-denied") {
+              return (
+                <BlockedCard
+                  key={i}
+                  result={{
+                    message:
+                      toolPart.approval?.reason ??
+                      "You denied this action.",
+                  }}
+                />
+              );
+            }
+            if (toolPart.state === "output-error") {
+              return (
+                <BlockedCard
+                  key={i}
+                  result={{ message: toolPart.errorText }}
+                />
+              );
+            }
+            if (toolPart.state === "output-available") {
+              const result = toolPart.output;
+              if (result?.error === "CONTRACT_VIOLATION") {
+                return <ViolationCard key={i} result={result} />;
+              }
+              if (result?.error === "ACTION_BLOCKED") {
+                return <BlockedCard key={i} result={result} />;
+              }
+              if (toolPart.approval?.approved) {
+                return (
+                  <SuccessCard
+                    key={i}
+                    title={`${getToolPartName(toolPart)} completed`}
+                  />
+                );
+              }
+              return null;
+            }
           }
           return null;
         })}
@@ -186,7 +285,13 @@ function MessageBubble({ message, onApprove }: { message: UIMessage; onApprove?:
 }
 
 export function ChatWindow({ hasContract }: { hasContract: boolean }) {
-  const { messages, sendMessage, status, toolInterrupt } = useInterruptions(
+  const {
+    messages,
+    sendMessage,
+    addToolApprovalResponse,
+    status,
+    toolInterrupt,
+  } = useInterruptions(
     (handler) =>
       useChat({
         transport: new DefaultChatTransport({ api: "/api/chat" }),
@@ -205,15 +310,17 @@ export function ChatWindow({ hasContract }: { hasContract: boolean }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
 
-  const handleApprove = useCallback(async (toolName: string) => {
-    await fetch("/api/approve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ toolName }),
+  const handleApprove = useCallback(async (id: string) => {
+    await addToolApprovalResponse({ id, approved: true });
+  }, [addToolApprovalResponse]);
+
+  const handleDeny = useCallback(async (id: string) => {
+    await addToolApprovalResponse({
+      id,
+      approved: false,
+      reason: "User denied this action.",
     });
-    stickRef.current = true;
-    sendMessage({ text: `Approved. Proceed with ${toolName}.` });
-  }, [sendMessage]);
+  }, [addToolApprovalResponse]);
 
   useEffect(() => {
     if (stickRef.current) {
@@ -255,7 +362,12 @@ export function ChatWindow({ hasContract }: { hasContract: boolean }) {
             </div>
           )}
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} onApprove={handleApprove} />
+            <MessageBubble
+              key={m.id}
+              message={m}
+              onApprove={handleApprove}
+              onDeny={handleDeny}
+            />
           ))}
           <TokenVaultInterruptHandler interrupt={toolInterrupt} />
           <div ref={bottomRef} />

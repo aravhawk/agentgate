@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 
-import { SignedContract, AuditEntry, PermissionLevel } from "./types";
+import { SignedContract, AuditEntry } from "./types";
 import { addAuditEntry } from "./store";
 
 export interface GuardResult {

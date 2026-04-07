@@ -74,20 +74,35 @@ function Entry({ entry }: { entry: AuditEntry }) {
 export function AuditDashboard({ pollInterval = 2000 }: { pollInterval?: number }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
 
-  const fetchAudit = useCallback(async () => {
+  const fetchAudit = useCallback(async (signal?: AbortSignal) => {
     try {
       const res = await fetch("/api/audit");
+      if (signal?.aborted) return;
       const { audit } = await res.json();
+      if (signal?.aborted) return;
       if (audit) setEntries(audit);
     } catch {
       /* noop */
     }
   }, []);
 
+  const handleRefresh = useCallback(() => {
+    void fetchAudit();
+  }, [fetchAudit]);
+
   useEffect(() => {
-    fetchAudit();
-    const id = setInterval(fetchAudit, pollInterval);
-    return () => clearInterval(id);
+    const controller = new AbortController();
+    const initialFetchId = window.setTimeout(() => {
+      void fetchAudit(controller.signal);
+    }, 0);
+    const id = setInterval(() => {
+      void fetchAudit(controller.signal);
+    }, pollInterval);
+    return () => {
+      clearTimeout(initialFetchId);
+      controller.abort();
+      clearInterval(id);
+    };
   }, [fetchAudit, pollInterval]);
 
   const violations = entries.filter((e) => e.status === "blocked").length;
@@ -103,7 +118,7 @@ export function AuditDashboard({ pollInterval = 2000 }: { pollInterval?: number 
           </h2>
           {entries.length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
         </div>
-        <button onClick={fetchAudit} className="p-1 rounded-md hover:bg-white/5 text-white/25 hover:text-white/40 transition">
+        <button onClick={handleRefresh} className="p-1 rounded-md hover:bg-white/5 text-white/25 hover:text-white/40 transition">
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
       </div>
