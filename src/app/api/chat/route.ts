@@ -21,6 +21,29 @@ import { getUser } from "@/lib/auth0";
 
 const date = new Date().toISOString();
 
+function wasApprovedInHistory(messages: Array<UIMessage>, toolName: string): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && msg.parts) {
+      for (const part of msg.parts) {
+        if (part.type === "tool-invocation") {
+          const partToolName = (part as any).toolName;
+          const res = (part as any).result ?? (part as any).output;
+          if (res?.error === "APPROVAL_REQUIRED" && partToolName === toolName) {
+            // Found the most recent APPROVAL_REQUIRED for this tool.
+            // Check if any user message follows it.
+            for (let j = i + 1; j < messages.length; j++) {
+              if (messages[j].role === "user") return true;
+            }
+            return false;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 function buildSystemPrompt(hasContract: boolean) {
   const base = `You are AgentGate, an AI assistant that operates under a Permission Contract signed by the user.
 You have access to Google Calendar and GitHub tools.
@@ -106,10 +129,11 @@ export async function POST(req: NextRequest) {
       };
     } else if (result.requiresApproval) {
       const originalExecute = toolDef.execute;
-      guardedTools[name] = {
-        ...toolDef,
-        execute: async (args: any) => {
-          if (consumeApproval(userId, name)) {
+      const approved = consumeApproval(userId, name) || wasApprovedInHistory(messages, name);
+      if (approved) {
+        guardedTools[name] = {
+          ...toolDef,
+          execute: async (args: any) => {
             logGuardDecision(userId, name, {
               ...result,
               allowed: true,
@@ -120,17 +144,23 @@ export async function POST(req: NextRequest) {
               return originalExecute(args);
             }
             return { error: "Tool has no execute function" };
-          }
-          logGuardDecision(userId, name, result);
-          return {
-            error: "APPROVAL_REQUIRED",
-            toolName: name,
-            ruleId: result.ruleId,
-            message: result.reason,
-            preview: args,
-          };
-        },
-      };
+          },
+        };
+      } else {
+        guardedTools[name] = {
+          ...toolDef,
+          execute: async (args: any) => {
+            logGuardDecision(userId, name, result);
+            return {
+              error: "APPROVAL_REQUIRED",
+              toolName: name,
+              ruleId: result.ruleId,
+              message: result.reason,
+              preview: args,
+            };
+          },
+        };
+      }
     } else {
       // ALLOWED - pass through but log
       const originalExecute = toolDef.execute;
