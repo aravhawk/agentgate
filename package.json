@@ -1,0 +1,46 @@
+{
+  "name": "app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.51",
+    "@ai-sdk/react": "^3.0.0",
+    "@auth0/ai": "^6.0.0",
+    "@auth0/ai-vercel": "^5.1.0",
+    "@auth0/nextjs-auth0": "^4.16.1",
+    "ai": "^6.0.149",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "framer-motion": "^12.38.0",
+    "googleapis": "^161.0.0",
+    "lucide-react": "^1.7.0",
+    "nanoid": "^5.1.5",
+    "next": "16.2.2",
+    "octokit": "^5.0.3",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-markdown": "^10.0.0",
+    "sonner": "^1.7.2",
+    "tailwind-merge": "^2.6.0",
+    "tailwindcss-animate": "^1.0.7",
+    "use-stick-to-bottom": "^1.0.44",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.2",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
