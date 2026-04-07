@@ -58,3 +58,18 @@ export function getAuditLog(userId: string): AuditEntry[] {
 export function clearAuditLog(userId: string): void {
   auditLogs.set(userId, []);
 }
+
+// Approval tracking for approval_required tools
+const approvals = new Map<string, Set<string>>();
+
+export function grantApproval(userId: string, toolName: string): void {
+  if (!approvals.has(userId)) approvals.set(userId, new Set());
+  approvals.get(userId)!.add(toolName);
+}
+
+export function consumeApproval(userId: string, toolName: string): boolean {
+  const set = approvals.get(userId);
+  if (!set?.has(toolName)) return false;
+  set.delete(toolName);
+  return true;
+}

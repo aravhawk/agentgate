@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, type FormEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
 import {
   type UIMessage,
   DefaultChatTransport,
@@ -65,7 +65,9 @@ function ViolationCard({ result }: { result: any }) {
   );
 }
 
-function ApprovalCard({ result }: { result: any }) {
+function ApprovalCard({ result, onApprove }: { result: any; onApprove?: (toolName: string) => void }) {
+  const [approved, setApproved] = useState(false);
+
   return (
     <div
       className="my-2 rounded-lg overflow-hidden"
@@ -87,6 +89,21 @@ function ApprovalCard({ result }: { result: any }) {
           >
             {JSON.stringify(result.preview, null, 2)}
           </pre>
+        )}
+        {onApprove && !approved && (
+          <button
+            onClick={() => {
+              setApproved(true);
+              onApprove(result.toolName);
+            }}
+            className="mt-2 px-3 py-1.5 rounded-md text-[11px] font-semibold text-black transition"
+            style={{ background: "#fbbf24" }}
+          >
+            Approve this action
+          </button>
+        )}
+        {approved && (
+          <p className="mt-2 text-[11px] text-emerald-400">Approved. Retrying...</p>
         )}
       </div>
     </div>
@@ -117,7 +134,7 @@ function ToolLoading({ name }: { name: string }) {
   );
 }
 
-function MessageBubble({ message }: { message: UIMessage }) {
+function MessageBubble({ message, onApprove }: { message: UIMessage; onApprove?: (toolName: string) => void }) {
   const isUser = message.role === "user";
 
   return (
@@ -149,7 +166,7 @@ function MessageBubble({ message }: { message: UIMessage }) {
             }
             const result = (part as any).output ?? (part as any).result;
             if (result?.error === "CONTRACT_VIOLATION") return <ViolationCard key={i} result={result} />;
-            if (result?.error === "APPROVAL_REQUIRED") return <ApprovalCard key={i} result={result} />;
+            if (result?.error === "APPROVAL_REQUIRED") return <ApprovalCard key={i} result={result} onApprove={onApprove} />;
             if (result?.error === "ACTION_BLOCKED") return <BlockedCard key={i} result={result} />;
             return null;
           }
@@ -187,6 +204,16 @@ export function ChatWindow({ hasContract }: { hasContract: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
+
+  const handleApprove = useCallback(async (toolName: string) => {
+    await fetch("/api/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toolName }),
+    });
+    stickRef.current = true;
+    sendMessage({ text: `Approved. Proceed with ${toolName}.` });
+  }, [sendMessage]);
 
   useEffect(() => {
     if (stickRef.current) {
@@ -228,7 +255,7 @@ export function ChatWindow({ hasContract }: { hasContract: boolean }) {
             </div>
           )}
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} />
+            <MessageBubble key={m.id} message={m} onApprove={handleApprove} />
           ))}
           <TokenVaultInterruptHandler interrupt={toolInterrupt} />
           <div ref={bottomRef} />

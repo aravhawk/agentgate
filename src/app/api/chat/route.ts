@@ -15,7 +15,7 @@ import {
 
 import { getCalendarEvents, createCalendarEvent } from "@/lib/tools/google-calendar";
 import { listRepositories, listPullRequests, postPRComment, mergePullRequest } from "@/lib/tools/github";
-import { getContract } from "@/lib/contracts/store";
+import { getContract, consumeApproval } from "@/lib/contracts/store";
 import { checkContract, logGuardDecision } from "@/lib/contracts/guard";
 import { getUser } from "@/lib/auth0";
 
@@ -105,20 +105,29 @@ export async function POST(req: NextRequest) {
         },
       };
     } else if (result.requiresApproval) {
-      // APPROVAL REQUIRED - execute but log as pending
-      // In a full implementation, this would pause and wait for user approval
-      // For the demo, we'll show the preview pattern
+      const originalExecute = toolDef.execute;
       guardedTools[name] = {
         ...toolDef,
         execute: async (args: any) => {
+          if (consumeApproval(userId, name)) {
+            logGuardDecision(userId, name, {
+              ...result,
+              allowed: true,
+              requiresApproval: false,
+              reason: "Approved by user",
+            });
+            if (typeof originalExecute === "function") {
+              return originalExecute(args);
+            }
+            return { error: "Tool has no execute function" };
+          }
           logGuardDecision(userId, name, result);
           return {
             error: "APPROVAL_REQUIRED",
+            toolName: name,
             ruleId: result.ruleId,
             message: result.reason,
             preview: args,
-            instruction:
-              "Show the user exactly what will be done and ask for their explicit approval.",
           };
         },
       };
